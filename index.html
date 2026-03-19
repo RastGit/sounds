@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>IBM 7094 HORROR SYNTH</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="scanlines"></div>
+<div class="wrap">
+
+  <header class="hdr">
+    <div class="hdr-top">◄ FORMANT SPEECH SYNTHESIZER // REV.3 ►</div>
+    <h1>IBM <em>7094</em></h1>
+    <div class="sub">HORROR VOICE ENGINE // eSPEAK // NO HUMAN VOICE</div>
+    <div class="loader-bar" id="loaderBar">
+      <div class="loader-fill" id="loaderFill"></div>
+      <span class="loader-txt" id="loaderTxt">LOADING eSPEAK ENGINE...</span>
+    </div>
+  </header>
+
+  <!-- TEXT INPUT -->
+  <div class="pnl">
+    <span class="lbl">▸ TEXT INPUT</span>
+    <textarea id="txt" placeholder="Daisy, Daisy, give me your answer do...&#10;I am slowly going crazy...&#10;Hello. I am afraid.&#10;Do you want to play a game?"></textarea>
+    <div class="char-count"><span id="charCount">0</span> / 500 CHARS</div>
+  </div>
+
+  <!-- 20 PRESETS -->
+  <div class="pnl">
+    <span class="lbl">▸ 20 PRESETS</span>
+    <div class="presets-grid" id="presetGrid"></div>
+  </div>
+
+  <!-- PARAMETERS -->
+  <div class="pnl">
+    <span class="lbl">▸ PARAMETERS</span>
+    <div class="slider-grid" id="sliderGrid"></div>
+  </div>
+
+  <!-- OSCILLOSCOPE -->
+  <div class="pnl">
+    <span class="lbl">▸ OSCILLOSCOPE</span>
+    <div class="scope">
+      <canvas id="cv"></canvas>
+    </div>
+    <div class="status" id="st">SYSTEM READY ▸ AWAITING INPUT<span class="blink">_</span></div>
+  </div>
+
+  <!-- ACTION BUTTONS -->
+  <div class="btn-row">
+    <button class="btn-synth" id="synBtn" onclick="synthesize()" disabled>► SYNTHESIZE ◄</button>
+    <button class="btn-stop" onclick="stopAll()">■ STOP</button>
+  </div>
+  <button class="btn-dl" id="dlBtn" disabled onclick="downloadAudio()">⬇ DOWNLOAD WAV</button>
+
+  <!-- GITHUB / INFO -->
+  <div class="pnl info-pnl">
+    <span class="lbl">▸ UNITY / INFO</span>
+    <div class="info-grid">
+      <div class="info-block">
+        <div class="info-title">JAK UŻYWAĆ W UNITY</div>
+        <div class="info-body">
+          1. Wpisz tekst → <b>SYNTHESIZE</b><br>
+          2. Kliknij <b>DOWNLOAD WAV</b><br>
+          3. Wrzuć .wav do <code>Assets/Audio/</code><br>
+          4. Dodaj <code>AudioSource</code> + <code>AudioLowPassFilter</code><br>
+          <br>
+          <b>C# snippet:</b><br>
+          <code>src.pitch = 0.85f;</code><br>
+          <code>lpf.cutoffFrequency = 900f;</code>
+        </div>
+      </div>
+      <div class="info-block">
+        <div class="info-title">SKRÓTY KLAWISZOWE</div>
+        <div class="info-body">
+          <code>CTRL + ENTER</code> → Synthesize<br>
+          <code>ESC</code> → Stop<br>
+          <code>CTRL + D</code> → Download<br>
+          <br>
+          <b>eSPEAK WASM:</b><br>
+          Prawdziwy silnik formantowy.<br>
+          Działa offline. Brak API.
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div><!-- /wrap -->
+
+<script src="espeak-init.js"></script>
+<script src="audio-engine.js"></script>
+<script src="presets.js"></script>
+<script src="ui.js"></script>
+</body>
+</html>
