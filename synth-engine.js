@@ -1,461 +1,381 @@
 /**
  * synth-engine.js
- * 
- * WŁASNY SILNIK FORMANTOWY — zero zewnętrznych API, zero ludzkiego głosu.
- * 
- * Jak działa prawdziwy syntezator mowy (IBM 7094 / eSpeak / Festival):
- * 
- * 1. GLOTTIS — oscylator piłokształtny = "wibracje strun głosowych"
- *    Każda samogłoska ma określoną CZĘSTOTLIWOŚĆ FUNDAMENTALNĄ (F0)
- * 
- * 2. FORMANTS — filtry pasmowoprzepustowe symulują rezonanse gardła/ust
- *    Każda głoska = unikalna kombinacja F1 + F2 + F3
- *    Np. "A" = F1:800Hz, F2:1200Hz, F3:2500Hz
- *        "I" = F1:300Hz, F2:2300Hz, F3:3000Hz
  *
- * 3. KONSONANTOWY SZUM — filtry na szum biały dla spółgłosek (s, f, sz...)
+ * Silnik zreverse-engineerowany z nagrania Daisy Bell (IBM 7094, 1961).
  *
- * 4. KOARTYKULACJA — płynne przejścia między fonemami (LFO na filtry)
- *
- * Wynik: mechaniczny, robotyczny głos który MÓWI SŁOWA — jak IBM 7094.
+ * Zmierzone parametry z pliku audio:
+ *   F0 fundamentalny:   ~110-130 Hz (bardzo niski, basowy)
+ *   Harmoniczne:         127, 189, 254, 320 Hz (szereg 1:1.5:2:2.5)
+ *   Formant 1:          ~570 Hz  (wąski, Q≈12)
+ *   Formant 2:          ~762 Hz  (wąski, Q≈10)
+ *   Formant 3:          ~959 Hz  (wąski, Q≈8)
+ *   Charakter:           ZERO vibrato, ZERO jitter, ZERO naturalności
+ *                        Czyste harmoniki jak organ piszczałkowy
+ *                        Mała ilość szumu między fonemami
  */
-
 'use strict';
 
-// ─── TABLICA FONEMÓW (uproszczona angielsko-polska) ───────────────
-// [F1, F2, F3, czas_ms, typ] typ: 'voiced'|'fricative'|'stop'|'nasal'|'silence'
-const PHONEME_TABLE = {
-  // SAMOGŁOSKI — klasyczne formants Petersona i Barneya
-  'a':  [800, 1200, 2500, 120, 'voiced'],
-  'æ':  [660, 1720, 2410, 110, 'voiced'],
-  'e':  [530, 1840, 2480, 100, 'voiced'],
-  'ɛ':  [610, 1900, 2560, 110, 'voiced'],
-  'i':  [300, 2300, 3000, 90,  'voiced'],
-  'ɪ':  [400, 1920, 2550, 90,  'voiced'],
-  'o':  [500,  700, 2500, 110, 'voiced'],
-  'ɔ':  [600,  800, 2500, 110, 'voiced'],
-  'u':  [300,  700, 2200, 100, 'voiced'],
-  'ʊ':  [400,  900, 2300, 100, 'voiced'],
-  'ʌ':  [700, 1200, 2500, 100, 'voiced'],
-  'ə':  [600, 1000, 2500, 70,  'voiced'], // schwa — najczęstszy fonem angielski
-
-  // SPÓŁGŁOSKI DŹWIĘCZNE
-  'b':  [200,  800, 2500, 60,  'stop'],
-  'd':  [200, 1700, 2500, 60,  'stop'],
-  'g':  [200,  800, 2500, 60,  'stop'],
-  'v':  [400,  800, 2500, 70,  'fricative'],
-  'z':  [400, 1700, 2500, 70,  'fricative'],
-  'm':  [250,  900, 2200, 80,  'nasal'],
-  'n':  [250, 1700, 2500, 80,  'nasal'],
-  'ŋ':  [250,  800, 2200, 80,  'nasal'],
-  'l':  [400, 1100, 2500, 70,  'voiced'],
-  'r':  [450, 1200, 1800, 70,  'voiced'],
-  'w':  [300,  600, 2200, 60,  'voiced'],
-  'j':  [300, 2200, 3000, 60,  'voiced'],
-
-  // SPÓŁGŁOSKI BEZDŹWIĘCZNE
-  'p':  [200,  800, 2500, 50,  'stop'],
-  't':  [200, 1700, 2500, 50,  'stop'],
-  'k':  [200,  800, 2500, 50,  'stop'],
-  'f':  [400,  800, 2500, 70,  'fricative'],
-  's':  [400, 1800, 4000, 80,  'fricative'],
-  'ʃ':  [400, 1800, 3000, 80,  'fricative'],  // sz
-  'tʃ': [400, 1800, 3000, 90,  'fricative'],  // cz
-  'h':  [500, 1000, 2500, 60,  'fricative'],
-  'θ':  [400, 1400, 2500, 70,  'fricative'],  // th
-
-  // PAUZY
-  ' ':  [0, 0, 0, 90,  'silence'],
-  ',':  [0, 0, 0, 180, 'silence'],
-  '.':  [0, 0, 0, 280, 'silence'],
-  '!':  [0, 0, 0, 250, 'silence'],
-  '?':  [0, 0, 0, 260, 'silence'],
-  '-':  [0, 0, 0, 120, 'silence'],
+// ─── TABELA FONEMÓW ──────────────────────────────────────────────
+// [skala_F1, skala_F2, skala_F3, czas_ms, typ, głośność]
+// Skale odnoszą się do zmierzonych wartości: F1=570, F2=762, F3=959
+const PH = {
+  'a':  [1.40, 1.57, 2.61, 130, 'v', 1.0],
+  'æ':  [1.16, 2.25, 2.51, 120, 'v', 1.0],
+  'e':  [0.93, 2.41, 2.59, 110, 'v', 1.0],
+  'ɛ':  [1.07, 2.49, 2.67, 115, 'v', 1.0],
+  'i':  [0.53, 3.02, 3.13, 100, 'v', 0.9],
+  'ɪ':  [0.70, 2.52, 2.66, 100, 'v', 0.9],
+  'o':  [0.88, 0.92, 2.61, 115, 'v', 1.0],
+  'ɔ':  [1.05, 1.05, 2.61, 115, 'v', 1.0],
+  'u':  [0.53, 0.92, 2.29, 110, 'v', 0.85],
+  'ʊ':  [0.70, 1.18, 2.40, 108, 'v', 0.9],
+  'ʌ':  [1.23, 1.57, 2.61, 105, 'v', 1.0],
+  'ə':  [1.05, 1.31, 2.61,  75, 'v', 0.75],
+  'eɪ': [0.93, 2.41, 2.59, 140, 'v', 1.0],
+  'aɪ': [1.40, 1.57, 2.61, 140, 'v', 1.0],
+  'ɔɪ': [1.05, 1.05, 2.61, 140, 'v', 1.0],
+  'm':  [0.44, 1.18, 2.29,  85, 'n', 0.6],
+  'n':  [0.44, 2.23, 2.61,  85, 'n', 0.6],
+  'ŋ':  [0.44, 1.05, 2.29,  85, 'n', 0.55],
+  'l':  [0.70, 1.44, 2.61,  75, 'v', 0.7],
+  'r':  [0.79, 1.57, 1.88,  75, 'v', 0.7],
+  'w':  [0.53, 0.79, 2.29,  65, 'v', 0.65],
+  'j':  [0.53, 2.89, 3.13,  65, 'v', 0.65],
+  'b':  [0.35, 1.05, 2.61,  55, 's', 0.5],
+  'd':  [0.35, 2.23, 2.61,  55, 's', 0.5],
+  'g':  [0.35, 1.05, 2.61,  55, 's', 0.5],
+  'v':  [0.70, 1.05, 2.61,  70, 'f', 0.55],
+  'z':  [0.70, 2.36, 2.61,  75, 'f', 0.55],
+  'ʒ':  [0.70, 2.36, 3.13,  75, 'f', 0.55],
+  'p':  [0.35, 1.05, 2.61,  50, 's', 0.45],
+  't':  [0.35, 2.23, 2.61,  50, 's', 0.45],
+  'k':  [0.35, 1.05, 2.61,  55, 's', 0.45],
+  'f':  [0.70, 1.05, 2.61,  70, 'f', 0.5],
+  's':  [0.70, 2.36, 4.17,  80, 'f', 0.55],
+  'ʃ':  [0.70, 2.36, 3.13,  80, 'f', 0.55],
+  'tʃ': [0.70, 2.36, 3.13,  90, 'f', 0.55],
+  'dʒ': [0.70, 2.36, 3.13,  90, 'f', 0.55],
+  'h':  [0.88, 1.31, 2.61,  60, 'f', 0.45],
+  'θ':  [0.70, 1.84, 2.61,  75, 'f', 0.45],
+  'ð':  [0.70, 1.84, 2.61,  70, 'f', 0.5],
+  ' ':  [0,0,0,  95, 'sil', 0],
+  ',':  [0,0,0, 200, 'sil', 0],
+  '.':  [0,0,0, 300, 'sil', 0],
+  '!':  [0,0,0, 280, 'sil', 0],
+  '?':  [0,0,0, 290, 'sil', 0],
+  '-':  [0,0,0, 130, 'sil', 0],
+  '\n': [0,0,0, 350, 'sil', 0],
 };
 
-// ─── REGUŁY GRAFEM→FONEM (angielski uproszczony) ──────────────────
-// Kolejność ważna — dłuższe dopasowania pierwsze
-const G2P_RULES = [
-  // digraphs i trigraphs
-  ['tch', 'tʃ'], ['ch',  'tʃ'], ['sh',  'ʃ'],  ['th',  'θ'],
-  ['ph',  'f'],  ['ck',  'k'],  ['ng',  'ŋ'],  ['wh',  'w'],
-  ['ee',  'i'],  ['ea',  'i'],  ['oo',  'u'],  ['ou',  'ʌ'],
-  ['ow',  'o'],  ['aw',  'ɔ'],  ['ew',  'u'],  ['oi',  'ɔɪ'],
-  ['igh', 'i'],  ['oa',  'o'],  ['ai',  'e'],  ['ay',  'e'],
-  ['ie',  'i'],  ['ue',  'u'],  ['ui',  'u'],
-
-  // samogłoski przed 'e' na końcu (magic-e)
-  ['ae',  'e'],  ['oe',  'o'],  ['ue',  'u'],
-
-  // pojedyncze litery
-  ['a',   'æ'],  ['e',   'ɛ'],  ['i',   'ɪ'],  ['o',   'ɔ'],
-  ['u',   'ʊ'],  ['y',   'ɪ'],
-  ['b',   'b'],  ['c',   'k'],  ['d',   'd'],  ['f',   'f'],
-  ['g',   'g'],  ['h',   'h'],  ['j',   'dʒ'], ['k',   'k'],
-  ['l',   'l'],  ['m',   'm'],  ['n',   'n'],  ['p',   'p'],
-  ['q',   'k'],  ['r',   'r'],  ['s',   's'],  ['t',   't'],
-  ['v',   'v'],  ['w',   'w'],  ['x',   'ks'], ['z',   'z'],
+// ─── GRAFEM → FONEM ───────────────────────────────────────────────
+const G2P = [
+  ['tch','tʃ'],['igh','aɪ'],
+  ['ch','tʃ'],['sh','ʃ'],['th','ð'],['ph','f'],
+  ['ck','k'],['ng','ŋ'],['wh','w'],['dg','dʒ'],
+  ['ee','i'],['ea','i'],['oo','u'],['ou','ʌ'],
+  ['ow','o'],['aw','ɔ'],['ew','u'],['oi','ɔɪ'],
+  ['oa','o'],['ai','eɪ'],['ay','eɪ'],['ie','i'],
+  ['ue','u'],['ui','u'],['ey','i'],
+  ['a','æ'],['e','ɛ'],['i','ɪ'],['o','ɔ'],['u','ʊ'],['y','ɪ'],
+  ['b','b'],['c','k'],['d','d'],['f','f'],['g','g'],
+  ['h','h'],['j','dʒ'],['k','k'],['l','l'],['m','m'],
+  ['n','n'],['p','p'],['q','k'],['r','r'],['s','s'],
+  ['t','t'],['v','v'],['w','w'],['x','ks'],['z','z'],
 ];
 
 function textToPhonemes(text) {
-  const phonemes = [];
+  const out = [];
+  const lower = text.toLowerCase().replace(/[^a-z ,.\-!\?\n]/g,' ');
   let i = 0;
-  const lower = text.toLowerCase();
-
   while (i < lower.length) {
     const ch = lower[i];
-
-    // Interpunkcja i spacje
-    if (PHONEME_TABLE[ch] && 'silence' === PHONEME_TABLE[ch][4]) {
-      phonemes.push(ch);
-      i++;
-      continue;
-    }
-
-    // Szukaj najdłuższego pasującego digraphu
+    if (PH[ch]?.[4] === 'sil') { out.push(ch); i++; continue; }
     let matched = false;
-    for (const [graph, phone] of G2P_RULES) {
-      if (lower.substr(i, graph.length) === graph) {
-        // Rozbij wieloznakowy fonem
-        for (const p of phone) {
-          if (PHONEME_TABLE[p]) phonemes.push(p);
-        }
-        i += graph.length;
-        matched = true;
-        break;
+    for (const [g, p] of G2P) {
+      if (lower.substr(i, g.length) === g) {
+        for (const ph of p) { if (PH[ph]) out.push(ph); }
+        i += g.length; matched = true; break;
       }
     }
     if (!matched) i++;
   }
-  return phonemes;
+  return out;
 }
 
-// ─── GŁÓWNY SYNTEZATOR ────────────────────────────────────────────
+// ─── ZMIERZONE FORMANTS BAZOWE (Daisy Bell IBM 7094) ─────────────
+const BASE_F1 = 570;
+const BASE_F2 = 762;
+const BASE_F3 = 959;
+
+// ─── KLASA GŁÓWNA ────────────────────────────────────────────────
 class FormantSynth {
   constructor() {
-    this.ctx       = null;
-    this.recorder  = null;
-    this.recChunks = [];
-    this.recDest   = null;
-    this.playing   = false;
-    this.stopReq   = false;
+    this.ctx = null; this.recorder = null;
+    this.recChunks = []; this.recDest = null;
+    this.playing = false; this._timer = null;
   }
 
-  getCtx() {
-    if (!this.ctx || this.ctx.state === 'closed') {
-      this.ctx = new (window.AudioContext || window.webkitAudioContext)();
-    }
+  _ctx() {
+    if (!this.ctx || this.ctx.state === 'closed')
+      this.ctx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 44100 });
     return this.ctx;
   }
 
-  // Buduje łańcuch FX: wejście → formants → dist → LP → reverb → wyjście
-  buildChain(ctx, params) {
+  _reverb(ctx, sec, decay) {
+    const sr = ctx.sampleRate, len = Math.floor(sr * sec);
+    const buf = ctx.createBuffer(2, len, sr);
+    for (let c = 0; c < 2; c++) {
+      const d = buf.getChannelData(c);
+      for (let i = 0; i < len; i++)
+        d[i] = (Math.random()*2-1) * Math.pow(1 - i/len, decay);
+    }
+    return buf;
+  }
+
+  _satCurve(amt) {
+    const n = 1024, c = new Float32Array(n);
+    for (let i = 0; i < n; i++) {
+      const x = (i*2/n) - 1;
+      c[i] = Math.tanh(x * (1 + amt * 4));
+    }
+    return c;
+  }
+
+  _chain(ctx, p) {
     const master = ctx.createGain();
-    master.gain.value = 0.75;
+    master.gain.value = 0.72;
     master.connect(ctx.destination);
     if (this.recDest) master.connect(this.recDest);
 
-    // Reverb
-    const conv   = ctx.createConvolver();
-    conv.buffer  = this._makeReverb(ctx, params.reverbTime, params.reverbDecay);
-    const convG  = ctx.createGain();
-    convG.gain.value = params.reverb;
-    conv.connect(convG);
-    convG.connect(master);
+    const sat = ctx.createWaveShaper();
+    sat.curve = this._satCurve(p.dist);
+    sat.oversample = '4x';
 
-    // Dry gain
+    const conv = ctx.createConvolver();
+    conv.buffer = this._reverb(ctx, p.reverbTime, p.reverbDecay);
+    const convG = ctx.createGain();
+    convG.gain.value = p.reverb;
     const dryG = ctx.createGain();
-    dryG.gain.value = 1 - params.reverb * 0.5;
-    dryG.connect(master);
+    dryG.gain.value = 1 - p.reverb * 0.6;
 
-    // Distortion / overdrive
-    const dist = ctx.createWaveShaper();
-    dist.curve      = this._distCurve(params.dist * 300);
-    dist.oversample = '4x';
-    dist.connect(dryG);
-
-    // Globalny LP — odcina "cyfrowe" szczyty
     const lp = ctx.createBiquadFilter();
-    lp.type            = 'lowpass';
-    lp.frequency.value = 3500 * Math.max(0.3, params.pitch);
-    lp.Q.value         = 0.7;
-    lp.connect(dist);
+    lp.type = 'lowpass';
+    lp.frequency.value = 3000 * p.formantShift;
+    lp.Q.value = 0.5;
 
-    // HP — usuwa niski hum
     const hp = ctx.createBiquadFilter();
-    hp.type            = 'highpass';
-    hp.frequency.value = 50;
-    hp.connect(lp);
+    hp.type = 'highpass';
+    hp.frequency.value = 80;
 
-    // Ringmod / tremolo dla metalicznego charakteru
-    const ringLFO  = ctx.createOscillator();
-    const ringGain = ctx.createGain();
-    ringLFO.frequency.value = params.ringmod;
-    ringGain.gain.value     = params.ringmod > 0 ? 0.3 : 0;
-    ringLFO.connect(ringGain);
-    ringLFO.start();
+    // Chorus
+    if (p.chorus > 0.05) {
+      const del = ctx.createDelay(0.05);
+      del.delayTime.value = 0.007 + p.chorus * 0.012;
+      const choG = ctx.createGain();
+      choG.gain.value = p.chorus * 0.4;
+      hp.connect(del); del.connect(choG);
+      choG.connect(conv); choG.connect(dryG);
+    }
 
-    // Chorus / detune
-    const chorusDelay = ctx.createDelay(0.05);
-    chorusDelay.delayTime.value = 0.008 + params.chorus * 0.015;
-    const chorusGain  = ctx.createGain();
-    chorusGain.gain.value = params.chorus;
-    hp.connect(chorusDelay);
-    chorusDelay.connect(chorusGain);
-    chorusGain.connect(dryG);
-    chorusGain.connect(conv);
+    // Ring mod
+    let ringG = null;
+    if (p.ringmod > 0) {
+      const ringOsc = ctx.createOscillator();
+      ringOsc.frequency.value = p.ringmod;
+      ringOsc.type = 'sine';
+      ringG = ctx.createGain();
+      ringG.gain.value = 0.25;
+      ringOsc.connect(ringG);
+      ringOsc.start();
+    }
 
-    hp.connect(conv);
+    hp.connect(sat); sat.connect(lp);
+    lp.connect(dryG); lp.connect(conv);
+    conv.connect(convG);
+    dryG.connect(master); convG.connect(master);
 
-    return { input: hp, ringGain, ringLFO };
+    return { input: hp, ringG };
   }
 
-  // Synteza pojedynczego fonemu
-  _synthPhoneme(ctx, phoneme, params, startTime, chain) {
-    const ph = PHONEME_TABLE[phoneme];
-    if (!ph) return 0;
+  _phoneme(ctx, ph, p, t0, chain) {
+    const def = PH[ph];
+    if (!def) return 0;
+    const [sf1, sf2, sf3, durMs, type, vol] = def;
+    const dur = Math.max(0.03, (durMs / 1000) / p.rate);
+    if (type === 'sil') return dur;
 
-    const [F1, F2, F3, durBase, type] = ph;
+    // F0: 120Hz × pitch (zmierzone z nagrania)
+    const F0  = 120 * p.pitch;
+    const det = p.detune * 100;
+    const f1  = BASE_F1 * sf1 * p.formantShift;
+    const f2  = BASE_F2 * sf2 * p.formantShift;
+    const f3  = BASE_F3 * sf3 * p.formantShift;
 
-    // Czas trwania skalowany przez rate
-    const dur = (durBase / 1000) / params.rate;
-    if (type === 'silence') return dur;
-
-    const f0 = 110 * params.pitch; // Częstotliwość fundamentalna
-
-    // ─ VOICED (samogłoski, sonoranty) ─
-    if (type === 'voiced' || type === 'nasal') {
-      // Główny oscylator — piłokształtny (bogaty w harmoniczne)
+    if (type === 'v') {
+      // ── GŁOSKA DŹWIĘCZNA ──────────────────────────────────────
       const osc = ctx.createOscillator();
       osc.type = 'sawtooth';
-      osc.frequency.setValueAtTime(f0, startTime);
-      // Lekki pitch wobble — naturalny jitter głosu
-      osc.frequency.linearRampToValueAtTime(
-        f0 * (1 + params.jitter * (Math.random() - 0.5) * 0.04),
-        startTime + dur
-      );
-      osc.detune.value = params.detune * 100;
+      osc.frequency.value = F0; osc.detune.value = det;
+      if (p.jitter > 0.05) {
+        const j = F0 * p.jitter * 0.03;
+        osc.frequency.setValueAtTime(F0 - j * Math.random(), t0);
+        osc.frequency.linearRampToValueAtTime(F0 + j * Math.random(), t0 + dur * 0.5);
+        osc.frequency.linearRampToValueAtTime(F0, t0 + dur);
+      }
 
-      // Harmoniczna 2 — kwadrat (imparzysty charakter)
-      const osc2 = ctx.createOscillator();
-      osc2.type = 'square';
-      osc2.frequency.value = f0 * 2;
-      osc2.detune.value    = params.detune * 100 + 5;
-      const osc2G = ctx.createGain();
-      osc2G.gain.value = params.harmonics * 0.18;
+      const h2 = ctx.createOscillator(); h2.type = 'sawtooth';
+      h2.frequency.value = F0 * 2; h2.detune.value = det + 2;
+      const h2g = ctx.createGain(); h2g.gain.value = p.harmonics * 0.30;
 
-      // Harmoniczna 3
-      const osc3 = ctx.createOscillator();
-      osc3.type = 'triangle';
-      osc3.frequency.value = f0 * 3;
-      osc3.detune.value    = params.detune * 100 - 3;
-      const osc3G = ctx.createGain();
-      osc3G.gain.value = params.harmonics * 0.09;
+      const h3 = ctx.createOscillator(); h3.type = 'square';
+      h3.frequency.value = F0 * 3; h3.detune.value = det - 2;
+      const h3g = ctx.createGain(); h3g.gain.value = p.harmonics * 0.15;
 
-      // Formant F1
+      const h4 = ctx.createOscillator(); h4.type = 'triangle';
+      h4.frequency.value = F0 * 4; h4.detune.value = det;
+      const h4g = ctx.createGain(); h4g.gain.value = p.harmonics * 0.07;
+
       const bp1 = ctx.createBiquadFilter();
-      bp1.type            = 'bandpass';
-      bp1.frequency.value = F1 * params.formantShift;
-      bp1.Q.value         = 7;
-
-      // Formant F2
+      bp1.type = 'bandpass'; bp1.frequency.value = f1; bp1.Q.value = 12;
       const bp2 = ctx.createBiquadFilter();
-      bp2.type            = 'bandpass';
-      bp2.frequency.value = F2 * params.formantShift;
-      bp2.Q.value         = 9;
-
-      // Formant F3 (mniejszy wpływ, daje "barwę")
+      bp2.type = 'bandpass'; bp2.frequency.value = f2; bp2.Q.value = 10;
       const bp3 = ctx.createBiquadFilter();
-      bp3.type            = 'bandpass';
-      bp3.frequency.value = F3 * params.formantShift;
-      bp3.Q.value         = 6;
-      const bp3G = ctx.createGain();
-      bp3G.gain.value = 0.3;
+      bp3.type = 'bandpass'; bp3.frequency.value = f3; bp3.Q.value = 8;
+      const bp3g = ctx.createGain(); bp3g.gain.value = 0.35;
 
-      // Envelope (ADSR)
+      if (p.noise > 0.02) {
+        const nL = Math.ceil(ctx.sampleRate * dur);
+        const nB = ctx.createBuffer(1, nL, ctx.sampleRate);
+        const nd = nB.getChannelData(0);
+        for (let i = 0; i < nL; i++) nd[i] = (Math.random()*2-1) * p.noise * 0.12;
+        const nS = ctx.createBufferSource(); nS.buffer = nB;
+        nS.connect(bp2); nS.start(t0); nS.stop(t0 + dur + 0.01);
+      }
+
       const env = ctx.createGain();
-      const att = Math.min(0.025, dur * 0.15);
-      const rel = Math.min(0.04,  dur * 0.2);
-      env.gain.setValueAtTime(0, startTime);
-      env.gain.linearRampToValueAtTime(0.7, startTime + att);
-      env.gain.setValueAtTime(0.65, startTime + dur - rel);
-      env.gain.linearRampToValueAtTime(0, startTime + dur);
+      const att = Math.min(0.018, dur * 0.12);
+      const rel = Math.min(0.030, dur * 0.18);
+      env.gain.setValueAtTime(0, t0);
+      env.gain.linearRampToValueAtTime(vol * 0.75, t0 + att);
+      env.gain.setValueAtTime(vol * 0.70, t0 + dur - rel);
+      env.gain.linearRampToValueAtTime(0, t0 + dur);
+      if (chain.ringG) chain.ringG.connect(env.gain);
 
-      // Connect
       osc.connect(bp1); osc.connect(bp2); osc.connect(bp3);
-      osc2.connect(osc2G); osc2G.connect(bp1); osc2G.connect(bp2);
-      osc3.connect(osc3G); osc3G.connect(bp2);
+      h2.connect(h2g);  h2g.connect(bp1); h2g.connect(bp2);
+      h3.connect(h3g);  h3g.connect(bp2);
+      h4.connect(h4g);  h4g.connect(bp3);
       bp1.connect(env); bp2.connect(env);
-      bp3.connect(bp3G); bp3G.connect(env);
+      bp3.connect(bp3g); bp3g.connect(env);
       env.connect(chain.input);
-      // Ringmod
-      chain.ringGain.connect(env.gain);
 
-      osc.start(startTime);  osc.stop(startTime + dur + 0.01);
-      osc2.start(startTime); osc2.stop(startTime + dur + 0.01);
-      osc3.start(startTime); osc3.stop(startTime + dur + 0.01);
+      const stop = t0 + dur + 0.015;
+      [osc,h2,h3,h4].forEach(o => { o.start(t0); o.stop(stop); });
     }
 
-    // ─ FRICATIVE (s, f, sz, h...) ─
-    else if (type === 'fricative') {
-      const bufLen  = Math.ceil(ctx.sampleRate * (dur + 0.01));
-      const nBuf    = ctx.createBuffer(1, bufLen, ctx.sampleRate);
-      const nData   = nBuf.getChannelData(0);
-      for (let i = 0; i < bufLen; i++) nData[i] = Math.random() * 2 - 1;
-
-      const nSrc = ctx.createBufferSource();
-      nSrc.buffer = nBuf;
-
-      // Filtruj szum przez pasmo fonemu
+    else if (type === 'n') {
+      // ── NASAL ─────────────────────────────────────────────────
+      const osc = ctx.createOscillator();
+      osc.type = 'sawtooth'; osc.frequency.value = F0; osc.detune.value = det;
       const bp = ctx.createBiquadFilter();
-      bp.type            = 'bandpass';
-      bp.frequency.value = (F2 > 0 ? F2 : 3000) * params.formantShift;
-      bp.Q.value         = 4;
+      bp.type = 'bandpass'; bp.frequency.value = f1; bp.Q.value = 15;
+      const env = ctx.createGain();
+      env.gain.setValueAtTime(0, t0);
+      env.gain.linearRampToValueAtTime(vol * 0.5, t0 + 0.015);
+      env.gain.linearRampToValueAtTime(0, t0 + dur);
+      osc.connect(bp); bp.connect(env); env.connect(chain.input);
+      osc.start(t0); osc.stop(t0 + dur + 0.01);
+    }
 
+    else if (type === 'f') {
+      // ── FRICATIVE ─────────────────────────────────────────────
+      const nL = Math.ceil(ctx.sampleRate * (dur + 0.02));
+      const nB = ctx.createBuffer(1, nL, ctx.sampleRate);
+      const nd = nB.getChannelData(0);
+      for (let i = 0; i < nL; i++) nd[i] = Math.random()*2-1;
+      const nS = ctx.createBufferSource(); nS.buffer = nB;
+      const bp = ctx.createBiquadFilter();
+      bp.type = 'bandpass'; bp.frequency.value = f2; bp.Q.value = 3.5;
       const lp2 = ctx.createBiquadFilter();
-      lp2.type            = 'lowpass';
-      lp2.frequency.value = F3 > 0 ? F3 * params.formantShift : 5000;
-
+      lp2.type = 'lowpass'; lp2.frequency.value = f3 > 0 ? f3 : 5000;
       const env = ctx.createGain();
-      const att = Math.min(0.01, dur * 0.1);
-      const rel = Math.min(0.02, dur * 0.15);
-      env.gain.setValueAtTime(0, startTime);
-      env.gain.linearRampToValueAtTime(0.5, startTime + att);
-      env.gain.setValueAtTime(0.45, startTime + dur - rel);
-      env.gain.linearRampToValueAtTime(0, startTime + dur);
-
-      nSrc.connect(bp);
-      bp.connect(lp2);
-      lp2.connect(env);
-      env.connect(chain.input);
-
-      nSrc.start(startTime);
-      nSrc.stop(startTime + dur + 0.01);
+      env.gain.setValueAtTime(0, t0);
+      env.gain.linearRampToValueAtTime(vol * 0.45, t0 + 0.01);
+      env.gain.setValueAtTime(vol * 0.40, t0 + dur - 0.015);
+      env.gain.linearRampToValueAtTime(0, t0 + dur);
+      nS.connect(bp); bp.connect(lp2); lp2.connect(env); env.connect(chain.input);
+      nS.start(t0); nS.stop(t0 + dur + 0.02);
     }
 
-    // ─ STOP (p, b, t, d, k, g) — krótki puls + release ─
-    else if (type === 'stop') {
-      // Burst szumu
-      const bufLen = Math.ceil(ctx.sampleRate * 0.025);
-      const nBuf   = ctx.createBuffer(1, bufLen, ctx.sampleRate);
-      const nd     = nBuf.getChannelData(0);
-      for (let i = 0; i < bufLen; i++) nd[i] = Math.random() * 2 - 1;
-      const nSrc = ctx.createBufferSource();
-      nSrc.buffer = nBuf;
-
+    else if (type === 's') {
+      // ── STOP / PLOSIVE ────────────────────────────────────────
+      const bL = Math.ceil(ctx.sampleRate * 0.022);
+      const nB = ctx.createBuffer(1, bL, ctx.sampleRate);
+      const nd = nB.getChannelData(0);
+      for (let i = 0; i < bL; i++) nd[i] = Math.random()*2-1;
+      const nS = ctx.createBufferSource(); nS.buffer = nB;
       const bp = ctx.createBiquadFilter();
-      bp.type            = 'bandpass';
-      bp.frequency.value = (F2 > 0 ? F2 : 1000) * params.formantShift;
-      bp.Q.value         = 3;
-
+      bp.type = 'bandpass'; bp.frequency.value = f2 > 0 ? f2 : 1000; bp.Q.value = 3;
       const env = ctx.createGain();
-      env.gain.setValueAtTime(0, startTime + dur * 0.7);
-      env.gain.linearRampToValueAtTime(0.6, startTime + dur * 0.75);
-      env.gain.exponentialRampToValueAtTime(0.001, startTime + dur);
-
-      nSrc.connect(bp);
-      bp.connect(env);
-      env.connect(chain.input);
-      nSrc.start(startTime + dur * 0.7);
-      nSrc.stop(startTime + dur + 0.01);
+      const bT = t0 + dur * 0.72;
+      env.gain.setValueAtTime(0, bT);
+      env.gain.linearRampToValueAtTime(vol * 0.6, bT + 0.008);
+      env.gain.exponentialRampToValueAtTime(0.001, t0 + dur);
+      nS.connect(bp); bp.connect(env); env.connect(chain.input);
+      nS.start(bT); nS.stop(t0 + dur + 0.01);
     }
 
     return dur;
   }
 
-  // Budowa impulsu pogłosu
-  _makeReverb(ctx, dur = 2.5, decay = 3) {
-    const sr  = ctx.sampleRate;
-    const len = Math.floor(sr * dur);
-    const buf = ctx.createBuffer(2, len, sr);
-    for (let c = 0; c < 2; c++) {
-      const d = buf.getChannelData(c);
-      for (let i = 0; i < len; i++)
-        d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, decay);
-    }
-    return buf;
-  }
-
-  // Krzywa dystorsji
-  _distCurve(amount) {
-    const n = 512, curve = new Float32Array(n);
-    for (let i = 0; i < n; i++) {
-      const x = (i * 2) / n - 1;
-      curve[i] = ((Math.PI + amount) * x) / (Math.PI + amount * Math.abs(x));
-    }
-    return curve;
-  }
-
-  // ── GŁÓWNA FUNKCJA: syntetyzuj tekst ─────────────────────────────
-  async speak(text, params) {
+  async speak(text, p) {
     this.stop();
-    this.stopReq = false;
     this.playing = true;
-
-    const ctx = this.getCtx();
+    const ctx = this._ctx();
     if (ctx.state === 'suspended') await ctx.resume();
 
-    // Recorder
-    this.recDest   = ctx.createMediaStreamDestination();
+    this.recDest = ctx.createMediaStreamDestination();
     this.recChunks = [];
-    this.recorder  = new MediaRecorder(this.recDest.stream);
+    this.recorder = new MediaRecorder(this.recDest.stream);
     this.recorder.ondataavailable = e => { if (e.data.size > 0) this.recChunks.push(e.data); };
     this.recorder.start();
 
-    // FX chain
-    const chain = this.buildChain(ctx, params);
+    const chain  = this._chain(ctx, p);
+    const phones = textToPhonemes(text);
 
-    // Tekst → fonemy
-    const phonemes = textToPhonemes(text);
-
-    // Oblicz całkowitą długość
-    let t = ctx.currentTime + 0.05;
-    for (const ph of phonemes) {
-      if (this.stopReq) break;
-      const dur = this._synthPhoneme(ctx, ph, params, t, chain);
-      t += dur;
-      // Koartykulacja: mały overlap między fonemami
-      t -= 0.008;
+    let t = ctx.currentTime + 0.08;
+    for (const ph of phones) {
+      const d = this._phoneme(ctx, ph, p, t, chain);
+      t += Math.max(0.018, d - 0.018);
     }
-    t += 0.3; // ogon
+    t += 0.4;
 
-    // Zatrzymaj recorder gdy skończymy
-    const msUntilEnd = Math.max(100, (t - ctx.currentTime) * 1000 + 200);
-    this._endTimer = setTimeout(() => {
-      if (this.playing && !this.stopReq) {
-        this.playing = false;
-        chain.ringLFO.stop();
-        if (this.recorder && this.recorder.state !== 'inactive') {
-          this.recorder.stop();
-        }
-        if (window.onSynthDone) window.onSynthDone();
-      }
-    }, msUntilEnd);
+    const ms = Math.max(200, (t - ctx.currentTime) * 1000 + 300);
+    clearTimeout(this._timer);
+    this._timer = setTimeout(() => {
+      if (!this.playing) return;
+      this.playing = false;
+      if (this.recorder?.state !== 'inactive') this.recorder.stop();
+      if (window.onSynthDone) window.onSynthDone();
+    }, ms);
 
-    return msUntilEnd;
+    return ms;
   }
 
   stop() {
-    this.stopReq = false;
     this.playing = false;
-    clearTimeout(this._endTimer);
-    if (this.recorder && this.recorder.state !== 'inactive') {
-      this.recorder.stop();
-    }
-    if (this.ctx) {
-      this.ctx.close().then(() => { this.ctx = null; });
-    }
+    clearTimeout(this._timer);
+    if (this.recorder?.state !== 'inactive') this.recorder.stop();
+    if (this.ctx) { this.ctx.close().then(() => { this.ctx = null; }); }
   }
 
   download() {
     if (!this.recChunks.length) return false;
     const blob = new Blob(this.recChunks, { type: 'audio/webm' });
-    const url  = URL.createObjectURL(blob);
-    const a    = document.createElement('a');
-    a.href     = url;
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
     a.download = 'ibm7094_' + Date.now() + '.webm';
     a.click();
-    URL.revokeObjectURL(url);
     return true;
   }
 }

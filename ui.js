@@ -4,18 +4,19 @@
 'use strict';
 
 const SLIDER_DEFS = [
-  { id:'pitch',       label:'PITCH (F0)',      min:0.20, max:1.50, step:0.01, def:0.85, unit:''   },
-  { id:'rate',        label:'RATE',            min:0.30, max:1.80, step:0.01, def:0.68, unit:''   },
-  { id:'detune',      label:'DETUNE',          min:-36,  max:12,   step:1,    def:-8,   unit:'st' },
-  { id:'formantShift',label:'FORMANT SHIFT',   min:0.40, max:2.00, step:0.05, def:1.0,  unit:'x'  },
-  { id:'harmonics',   label:'HARMONICS',       min:0.00, max:1.00, step:0.01, def:0.50, unit:''   },
-  { id:'dist',        label:'DISTORTION',      min:0.00, max:1.00, step:0.01, def:0.15, unit:''   },
-  { id:'reverb',      label:'REVERB MIX',      min:0.00, max:1.00, step:0.01, def:0.55, unit:''   },
-  { id:'reverbTime',  label:'REVERB TIME',     min:0.50, max:4.00, step:0.10, def:2.50, unit:'s'  },
-  { id:'reverbDecay', label:'REVERB DECAY',    min:1.00, max:5.00, step:0.10, def:3.00, unit:''   },
+  { id:'pitch',       label:'PITCH (F0)',      min:0.20, max:1.50, step:0.01, def:1.00, unit:''   },
+  { id:'rate',        label:'RATE',            min:0.30, max:1.80, step:0.01, def:0.70, unit:''   },
+  { id:'detune',      label:'DETUNE',          min:-36,  max:12,   step:1,    def:0,    unit:'st' },
+  { id:'formantShift',label:'FORMANT SHIFT',   min:0.40, max:2.00, step:0.05, def:1.00, unit:'x'  },
+  { id:'harmonics',   label:'HARMONICS',       min:0.00, max:1.00, step:0.01, def:0.60, unit:''   },
+  { id:'dist',        label:'DISTORTION',      min:0.00, max:1.00, step:0.01, def:0.08, unit:''   },
+  { id:'reverb',      label:'REVERB MIX',      min:0.00, max:1.00, step:0.01, def:0.35, unit:''   },
+  { id:'reverbTime',  label:'REVERB TIME',     min:0.50, max:4.00, step:0.10, def:1.20, unit:'s'  },
+  { id:'reverbDecay', label:'REVERB DECAY',    min:1.00, max:5.00, step:0.10, def:4.00, unit:''   },
   { id:'ringmod',     label:'RING MOD',        min:0,    max:80,   step:1,    def:0,    unit:'Hz' },
-  { id:'chorus',      label:'CHORUS',          min:0.00, max:1.00, step:0.01, def:0.10, unit:''   },
-  { id:'jitter',      label:'JITTER',          min:0.00, max:1.00, step:0.01, def:0.20, unit:''   },
+  { id:'chorus',      label:'CHORUS',          min:0.00, max:1.00, step:0.01, def:0.00, unit:''   },
+  { id:'jitter',      label:'JITTER',          min:0.00, max:1.00, step:0.01, def:0.00, unit:''   },
+  { id:'noise',       label:'BREATH NOISE',    min:0.00, max:0.60, step:0.01, def:0.03, unit:''   },
 ];
 
 // ── BUILD UI ─────────────────────────────────────────────────────
