@@ -355,7 +355,7 @@ class FormantSynth {
     this._timer = setTimeout(() => {
       if (!this.playing) return;
       this.playing = false;
-      if (this.recorder?.state !== 'inactive') this.recorder.stop();
+      try { if (this.recorder && this.recorder.state !== 'inactive') this.recorder.stop(); } catch(_) {}
       if (window.onSynthDone) window.onSynthDone();
     }, ms);
 
@@ -365,7 +365,10 @@ class FormantSynth {
   stop() {
     this.playing = false;
     clearTimeout(this._timer);
-    if (this.recorder?.state !== 'inactive') this.recorder.stop();
+    try {
+      if (this.recorder && this.recorder.state !== 'inactive') this.recorder.stop();
+    } catch(_) {}
+    this.recorder = null;
     if (this.ctx) { this.ctx.close().then(() => { this.ctx = null; }); }
   }
 
